@@ -10,6 +10,7 @@ use bitflags::*;
 use alloc::vec::Vec;
 use super::File;
 use crate::mm::UserBuffer;
+use super::{StatMode, Stat};
 
 /// A wrapper around a filesystem inode
 /// to implement File trait atop
@@ -37,7 +38,7 @@ impl OSInode {
             writable,
             inner: unsafe { UPSafeCell::new(OSInodeInner {
                 offset: 0,
-                inode,
+                inode: inode,
             })},
         }
     }
@@ -139,6 +140,31 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
     }
 }
 
+pub fn linkat(old_name: &str, new_name: &str) -> isize {
+    //TO DO: add an DirEntry to ROOT_INODE, and increment OSInode.nlink 
+    //Is this things should be given to EFS? If so, nlink, statMode are in EFS/Inode?
+    if let Some(inode) = ROOT_INODE.find(old_name) {
+        if old_name == new_name {
+            -1
+        }
+        else {
+            ROOT_INODE.link(old_name, new_name)
+        }
+    }
+    else {
+        -1
+    }
+}
+
+pub fn unlinkat(name: &str) -> isize {
+    if let Some(inode) = ROOT_INODE.find(name) {
+        ROOT_INODE.unlink(name)
+    }
+    else {
+        -1
+    }
+}
+
 impl File for OSInode {
     fn readable(&self) -> bool { self.readable }
     fn writable(&self) -> bool { self.writable }
@@ -165,5 +191,21 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    fn stat(&self, st: &mut Stat) -> isize {
+        let inode = &self.inner.exclusive_access().inode;
+        st.dev = 0;
+        st.mode = inode.read_disk_inode(|diskinode| {
+            if diskinode.is_dir() {
+                StatMode::DIR
+            }
+            else {
+                StatMode::FILE
+            }
+        });
+        st.ino = inode.block_id as u64;
+        st.nlink = ROOT_INODE.get_nlink(inode);
+        st.pad = [0; 7];
+        0
     }
 }

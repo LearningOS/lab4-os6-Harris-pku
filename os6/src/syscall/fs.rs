@@ -5,11 +5,12 @@ use crate::mm::translated_str;
 use crate::mm::translated_refmut;
 use crate::task::current_user_token;
 use crate::task::current_task;
-use crate::fs::open_file;
+use crate::fs::{open_file, linkat, unlinkat};
 use crate::fs::OpenFlags;
 use crate::fs::Stat;
 use crate::mm::UserBuffer;
 use alloc::sync::Arc;
+use crate::mm::{PageTable, VirtAddr, PhysAddr};
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
     let token = current_user_token();
@@ -81,13 +82,35 @@ pub fn sys_close(fd: usize) -> isize {
 
 // YOUR JOB: 扩展 easy-fs 和内核以实现以下三个 syscall
 pub fn sys_fstat(_fd: usize, _st: *mut Stat) -> isize {
-   -1
+    let current_task = current_task().unwrap();
+    let token = current_user_token();
+    let page_table = PageTable::from_token(token);
+    let va = VirtAddr::from(_st as usize);
+    let vpn = va.floor();
+    let ppn = page_table.translate(vpn).unwrap().ppn();
+    let offset = va.page_offset();
+    let pa: PhysAddr = ppn.into();
+    let task_inner = current_task.inner_exclusive_access();
+    if let Some(file) = &task_inner.fd_table[_fd]{
+        unsafe {
+            file.stat(&mut *((pa.0 + offset) as *mut Stat))
+        }
+    }else {
+        -1
+    }
 }
 
 pub fn sys_linkat(_old_name: *const u8, _new_name: *const u8) -> isize {
-    -1
+    let task = current_task().unwrap();
+    let token = current_user_token();
+    let old_name = translated_str(token, _old_name);
+    let new_name = translated_str(token, _new_name);
+    linkat(&old_name, &new_name)
 }
 
 pub fn sys_unlinkat(_name: *const u8) -> isize {
-    -1
+    let task = current_task().unwrap();
+    let token = current_user_token();
+    let name = translated_str(token, _name);
+    unlinkat(&name)
 }

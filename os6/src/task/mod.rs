@@ -23,7 +23,7 @@ use manager::fetch_task;
 use switch::__switch;
 use crate::mm::VirtAddr;
 use crate::mm::MapPermission;
-use crate::config::PAGE_SIZE;
+use crate::config::{PAGE_SIZE, BIG_STRIDE};
 use crate::timer::get_time_us;
 pub use crate::syscall::process::TaskInfo;
 use crate::fs::{open_file, OpenFlags};
@@ -103,4 +103,100 @@ lazy_static! {
 
 pub fn add_initproc() {
     add_task(INITPROC.clone());
+}
+
+pub fn get_task_info() -> TaskInfo {
+    let task = current_task().unwrap();
+    let inner = task.inner_exclusive_access();
+    let new_info = TaskInfo {
+        status: inner.task_status,
+        syscall_times: inner.syscall_times,
+        time: get_time_us() / 1000 - inner.start_time, 
+    };
+    drop(inner);
+    new_info
+}
+
+pub fn update_task_info(syscall_id: usize) {
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    inner.syscall_times[syscall_id] += 1;
+    drop(inner)
+}
+
+pub fn malloc(start: usize, len: usize, port: usize) -> isize {
+    if len == 0 {
+        return 0;
+    }
+    if (port >> 3) != 0 || (port & 0x7) == 0 || start % 4096 != 0 {
+        return -1;
+    } 
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    let memory_set = &mut inner.memory_set;
+    let l: VirtAddr = start.into();
+    let r: VirtAddr = (start + len).into();
+    let lvpn = l.floor();
+    let rvpn = r.ceil();
+    for area in &memory_set.areas {
+        if lvpn <= area.vpn_range.get_start() && rvpn > area.vpn_range.get_start() {
+            return -1;
+        }
+    }
+    let mut permission = MapPermission::from_bits((port as u8) << 1).unwrap();
+    permission.set(MapPermission::U, true);
+    let mut start = start;
+    let end = start + len;
+    while start < end {
+        let mut endr = start + PAGE_SIZE;
+        if endr > end {
+            endr = end;
+        }
+        memory_set.insert_framed_area(start.into(), endr.into(), permission);
+        start += PAGE_SIZE;
+    }
+    0
+}
+
+pub fn mfree(start: usize, len: usize) -> isize {
+    if len == 0{
+        return 0;
+    }
+    if start % 4096 != 0 {
+        return -1;
+    }
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    let memory_set = &mut inner.memory_set;
+    let l: VirtAddr = start.into();
+    let r: VirtAddr = (start + len).into();
+    let lvpn = l.floor();
+    let rvpn = r.ceil();
+    let mut cnt = 0;
+    for area in &memory_set.areas {
+        if lvpn <= area.vpn_range.get_start() && rvpn > area.vpn_range.get_start() {
+            cnt += 1;
+        }
+    }
+    if cnt < rvpn.0 - lvpn.0 {
+        return -1;
+    }
+    for i in 0..memory_set.areas.len() {
+        if !memory_set.areas.get(i).is_some() {
+            continue;
+        }
+        if lvpn <= memory_set.areas[i].vpn_range.get_start() && rvpn > memory_set.areas[i].vpn_range.get_start() {
+            memory_set.areas[i].unmap(&mut memory_set.page_table);
+            memory_set.areas.remove(i);
+        }
+    }
+    0
+}
+
+pub fn set_priority(prio: usize) {
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    task_inner.task_priority = prio;
+    task_inner.task_stride = BIG_STRIDE / prio;
+    drop(task_inner);
 }

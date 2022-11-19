@@ -12,6 +12,8 @@ use core::cell::RefMut;
 use crate::fs::{File, Stdin, Stdout};
 use alloc::string::String;
 use crate::mm::translated_refmut;
+use crate::timer::get_time_us;
+use crate::config::{MAX_SYSCALL_NUM, BIG_STRIDE};
 
 /// Task control block structure
 ///
@@ -50,6 +52,11 @@ pub struct TaskControlBlockInner {
     /// It is set when active exit or execution error occurs
     pub exit_code: i32,
     pub fd_table: Vec<Option<Arc<dyn File + Send + Sync>>>,
+    pub syscall_times: [u32; MAX_SYSCALL_NUM],
+    pub start_time: usize,
+    pub task_priority: usize,
+    pub task_stride: usize,
+    pub task_pass: usize,
 }
 
 /// Simple access to its internal fields
@@ -124,6 +131,11 @@ impl TaskControlBlock {
                         // 2 -> stderr
                         Some(Arc::new(Stdout)),
                     ],
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    start_time: get_time_us() / 1000,
+                    task_priority: 16,
+                    task_stride: BIG_STRIDE / 16,
+                    task_pass: 0,
                 })
             },
         };
@@ -200,6 +212,11 @@ impl TaskControlBlock {
                     children: Vec::new(),
                     exit_code: 0,
                     fd_table: new_fd_table,
+                    start_time: parent_inner.start_time,
+                    syscall_times: parent_inner.syscall_times,
+                    task_priority: parent_inner.task_priority,
+                    task_stride: parent_inner.task_stride,
+                    task_pass: parent_inner.task_pass,
                 })
             },
         });
